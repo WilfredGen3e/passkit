@@ -14,7 +14,17 @@ Zolang dat zo is, is alles vanaf fase 1 hypothetisch. Niet vooruitbouwen.
 
 ## De volgende stap
 
-Fase 0 daadwerkelijk draaien. De testtenant is er; de volledige voorwaardenlijst staat in [phase0/README.md](../phase0/README.md).
+**Begin met een syntaxcontrole en `Test-Encoding.ps1`.** De laatste wijzigingen aan `Invoke-Phase0Test.ps1` (verplichte `-SubscriptionId`, hergebruik van een bestaande Graph-sessie) zijn geschreven maar niet meer gecontroleerd voordat we stopten. Doe dat eerst.
+
+Daarna fase 0 draaien. Testtenant en Key Vault staan klaar; de volledige voorwaardenlijst staat in [phase0/README.md](../phase0/README.md).
+
+Nog aan te leveren voordat er iets kan draaien:
+
+| | |
+|---|---|
+| Tenant-ID | van de testtenant |
+| UPN | van het testaccount |
+| Subscription-ID + vaultnaam | van de Key Vault in onze eigen tenant |
 
 **Twee runs, niet één.** Eerst tegen een gewone testgebruiker, daarna tegen een testgebruiker met Global Admin. Voor auth-methoden van een admin-account is Privileged Authentication Administrator nodig in plaats van Authentication Administrator, en dat is het scenario dat in productie geldt. Een geslaagde run tegen een gewone gebruiker bewijst dus minder dan hij lijkt te bewijzen.
 
@@ -27,7 +37,7 @@ Eerst met `-SkipRegistration` om te zien wat er verstuurd zou worden.
 | PRD | vastgesteld | v1.0, [docs/PRD.md](PRD.md) |
 | CBOR/COSE-encoder | werkt | `phase0/PasskeyManager.Phase0.psm1`, handgeschreven, geen dependencies |
 | Encodertest | slaagt | `phase0/Test-Encoding.ps1`, 30 controles, draait offline |
-| Fase 0-testscript | geschreven, ongetest | `phase0/Invoke-Phase0Test.ps1` — nooit tegen een echte tenant gedraaid |
+| Fase 0-testscript | geschreven, ongetest | `phase0/Invoke-Phase0Test.ps1` — nooit tegen een tenant gedraaid, en de laatste wijzigingen zijn niet eens syntactisch gecontroleerd |
 | Alles vanaf fase 1 | niets | wacht op de uitkomst van fase 0 |
 
 ## Wat we onderweg zijn tegengekomen
@@ -52,7 +62,7 @@ Dingen die geld of tijd kosten als iemand ze opnieuw moet ontdekken.
 ## Afspraken over dit project
 
 - **Nooit vooruitbouwen op een onbeantwoorde fase.** De fasering in PRD §11 is bewust zo gesneden dat elke fase de volgende rechtvaardigt.
-- **Testtenant, niet klanttenant**, tot fase 0 rond is.
+- **Testtenant, niet klanttenant**, tot fase 0 rond is. En: tenant en subscription staan expliciet vast voordat er iets uitgevoerd wordt, ook bij read-only verkenning.
 - **Aannames markeren in plaats van hardcoderen.** RP ID, API-versie en body-vorm staan nu als expliciet openstaand in de code en de leesmij; dat zo houden tot ze bewezen zijn.
 - De handgeschreven encoder blijft handgeschreven en getest. Een dependency erbij is verleidelijk maar dit is Tier-0-code die door een auditor gelezen moet kunnen worden.
 
@@ -70,3 +80,10 @@ Dingen die geld of tijd kosten als iemand ze opnieuw moet ontdekken.
 - Testtenant beschikbaar. Voorwaardenlijst uitgewerkt in de fase 0-leesmij; twee voorwaarden waren nog niet in beeld: sleutelbeperkingen uit, en het onderscheid tussen Authentication Administrator en Privileged Authentication Administrator.
 - Script uitgebreid met een preflight (Az-context, modules, bereikbaarheid van de vault) zodat een misconfiguratie faalt vóórdat er een challenge opgehaald is, en met opruimen van de sleutel als de registratie mislukt.
 - Script leest nu de adminrollen van het doelaccount uit en noteert daarmee welk van de twee rolscenario's er getest is.
+
+### 19 augustus 2026 (einde dag)
+- Testtenant en Key Vault staan klaar. Er is nog niets gedraaid: bij de eerste poging bleek de actieve Az-context op een klant-PROD-subscription te staan, en dat is precies het ongeluk dat we niet willen.
+- Daarom `-SubscriptionId` verplicht gemaakt: het script weigert nu te draaien als de actieve context een andere subscription is dan opgegeven. Pakken wat er toevallig actief is, is voor dit soort code geen aanvaardbaar gedrag.
+- Graph-sessie wordt hergebruikt als die al op de goede tenant staat; scheelt een browserprompt per run.
+- **Deze twee wijzigingen zijn niet meer gecontroleerd.** Geen syntaxcheck, geen encodertest gedraaid. Morgen mee beginnen.
+- Werkafspraak aangescherpt: niets uitvoeren tegen een omgeving zonder dat expliciet vaststaat welke tenant en welke subscription. Dat geldt ook voor read-only verkenning.

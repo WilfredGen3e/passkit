@@ -44,15 +44,20 @@
     beta of v1.0. De fido2-provisioning-endpoints zijn niet in elke versie
     aanwezig; welke werkt is onderdeel van wat fase 0 vaststelt.
 
+.PARAMETER SubscriptionId
+    De subscription waarin de Key Vault staat. Verplicht en wordt getoetst aan de
+    actieve Az-context. Zonder deze controle pakt het script stilzwijgend welke
+    context er toevallig actief is, en dat kan een klantomgeving zijn.
+
 .PARAMETER SkipRegistration
     Alles opbouwen en wegschrijven, maar niet daadwerkelijk POSTen. Handig om
     eerst te zien wat er verstuurd zou worden.
 
 .EXAMPLE
-    .\Invoke-Phase0Test.ps1 -CustomerTenantId <guid> -UserPrincipalName admin@klant.onmicrosoft.com -KeyVaultName kv-passkeys-test -SkipRegistration
+    .\Invoke-Phase0Test.ps1 -CustomerTenantId <guid> -UserPrincipalName admin@testtenant.onmicrosoft.com -KeyVaultName kv-pkm-test -SubscriptionId <guid> -SkipRegistration
 
 .EXAMPLE
-    .\Invoke-Phase0Test.ps1 -CustomerTenantId <guid> -UserPrincipalName admin@klant.onmicrosoft.com -KeyVaultName kv-passkeys-test
+    .\Invoke-Phase0Test.ps1 -CustomerTenantId <guid> -UserPrincipalName admin@testtenant.onmicrosoft.com -KeyVaultName kv-pkm-test -SubscriptionId <guid>
 #>
 
 [CmdletBinding()]
@@ -60,6 +65,7 @@ param(
     [Parameter(Mandatory)][guid]$CustomerTenantId,
     [Parameter(Mandatory)][string]$UserPrincipalName,
     [Parameter(Mandatory)][string]$KeyVaultName,
+    [Parameter(Mandatory)][string]$SubscriptionId,
 
     [string]$KeyName,
     [string]$DisplayName = 'Passkey Manager fase 0-test',
@@ -137,7 +143,20 @@ try {
     if (-not $azContext) {
         throw 'Geen Azure-context. Draai eerst Connect-AzAccount tegen de tenant waar de Key Vault staat (onze eigen tenant, niet de klanttenant).'
     }
-    Write-Host "   Az        : $($azContext.Account.Id) / $($azContext.Subscription.Name)"
+
+    # Harde toets in plaats van pakken wat er toevallig actief is. Een sessie die
+    # nog op een klantomgeving staat is een reeel scenario en het gevolg zou zijn
+    # dat we daar een sleutel aanmaken.
+    if ($azContext.Subscription.Id -ne $SubscriptionId) {
+        throw @"
+Actieve Az-context staat op een andere subscription dan opgegeven.
+  actief    : $($azContext.Subscription.Name) ($($azContext.Subscription.Id))
+  verwacht  : $SubscriptionId
+Wissel met: Set-AzContext -SubscriptionId $SubscriptionId
+"@
+    }
+    Write-Host "   Az        : $($azContext.Account.Id)"
+    Write-Host "   sub       : $($azContext.Subscription.Name) ($($azContext.Subscription.Id))"
 
     # Leesbaarheid van de vault nu vaststellen, niet straks. Faalt dit op
     # rechten, dan ontbreekt Key Vault Crypto Officer.
@@ -163,9 +182,16 @@ try {
     # met -TenantId van de klant. Lukt de connect maar faalt straks de POST met
     # 403, dan is dat het antwoord op vraag 2.
 
-    Connect-MgGraph -TenantId $CustomerTenantId -Scopes 'UserAuthenticationMethod.ReadWrite.All', 'User.Read.All' -NoWelcome
-
+    # Een bestaande sessie op dezelfde tenant hergebruiken. Scheelt een
+    # browserprompt per run, en bij herhaald testen zijn dat er veel.
     $context = Get-MgContext
+    if ($context -and $context.TenantId -eq $CustomerTenantId.ToString()) {
+        Write-Host '   bestaande Graph-sessie hergebruikt'
+    }
+    else {
+        Connect-MgGraph -TenantId $CustomerTenantId -Scopes 'UserAuthenticationMethod.ReadWrite.All', 'User.Read.All' -NoWelcome
+        $context = Get-MgContext
+    }
     $result.steps.graphContext = [ordered]@{
         account  = $context.Account
         tenantId = $context.TenantId
