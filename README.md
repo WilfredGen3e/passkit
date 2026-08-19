@@ -16,4 +16,6 @@ Kern van het ontwerp: **de private key verlaat Key Vault nooit.** De backend is 
 
 ## Status
 
-Fase 0, nog niet uitgevoerd. De testcode ligt er en is offline gevalideerd, maar er is nog niet tegen een tenant aan gedraaid. Zolang niet vaststaat dat Entra een volledig in software gegenereerde credential accepteert — en dat dat met alleen GDAP-rechten kan — is de rest van de bouw hypothetisch.
+Fase 0, nog niet beantwoord. Het testscript draait inmiddels tegen een echte tenant maar komt nog niet tot de registratie: onze app-registratie moet eerst in de testtenant geconsent worden. Zolang niet vaststaat dat Entra een volledig in software gegenereerde credential accepteert — en dat dat met alleen GDAP-rechten kan — is de rest van de bouw hypothetisch.
+
+Onderweg wel een bevinding die het ontwerp raakt: GDAP alleen geeft geen toegang tot een klanttenant. Ook een eigen multi-tenant app heeft er een eenmalige onboarding nodig. Zie [Voortgang](docs/VOORTGANG.md).

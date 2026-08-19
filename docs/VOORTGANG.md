@@ -12,23 +12,46 @@ Werkdocument om het project tussen sessies over te kunnen dragen. Wie hier koud 
 
 Zolang dat zo is, is alles vanaf fase 1 hypothetisch. Niet vooruitbouwen.
 
-De omgeving staat inmiddels wel klaar en de parameters zijn bekend. We zijn blijven steken op app-consent in de testtenant — een inrichtingsstap vóór de eigenlijke test.
+De omgeving staat klaar, de parameters zijn bekend en het script heeft echt gedraaid — maar het is nog niet tot de registratie-POST gekomen. Alle tijd ging op aan toegang krijgen tot de testtenant, niet aan passkeys. Dat is geen verloren tijd: het heeft de vraag beantwoord met welke app-identiteit we een klanttenant binnenkomen, en dat antwoord raakt het ontwerp harder dan verwacht.
+
+Hoever we kwamen: preflight geslaagd, Graph-login geslaagd met een eigen app-registratie, en toen `Request_BadRequest: Unsupported token. Unable to initialize the authorization context.` op het ophalen van het doelaccount. Vrijwel zeker omdat de app nog geen service principal in de testtenant heeft.
 
 ## De volgende stap
 
-**Admin consent voor Graph Command Line Tools in de testtenant.** Daar loopt het nu op vast: `Connect-MgGraph` tegen de testtenant geeft *not authorized in the tenant*, want het service principal van die app bestaat daar niet. Consent-URL:
+Drie inrichtingsstappen, dan pas de test. Geen daarvan meet iets over passkeys.
+
+**1. Consent voor onze eigen app in de testtenant.** Vereist Global Admin daar; via het access package is dat tijdelijk te krijgen. Een GDAP-account alleen kan het niet — dat is geprobeerd en het gaf 403.
 
 ```
-https://login.microsoftonline.com/<tenantId>/adminconsent?client_id=14d82eec-204b-4c2f-b7e8-296a70dab67e
+https://login.microsoftonline.com/0d89711e-71b0-4e19-893a-eba5dbcf7e16/adminconsent?client_id=e3fb0cfc-8a8a-4a5c-aa18-fc9aaa016a8a
 ```
 
-Dat is tenantinrichting, geen onderdeel van wat fase 0 meet — zie de bevinding hieronder, want voor productie is dit wél een ontwerpvraag.
+**2. Key Vault Crypto Officer** op de vault. Staat er nu niet; er is alleen Owner op de subscription en dat geeft geen data plane-rechten.
 
-Daarna de droge run, dan de echte. De parameters staan vast (zie hieronder), het script is nagelopen en de encodertest slaagt.
+```powershell
+New-AzRoleAssignment -ObjectId 9e3d0083-8ef0-40c9-82e8-f64467e96340 `
+  -RoleDefinitionName 'Key Vault Crypto Officer' `
+  -Scope '/subscriptions/bb23ea30-0ac7-4feb-b329-bb311d2322da/resourcegroups/rg_ssi_passkeymanager/providers/microsoft.keyvault/vaults/testpasskey'
+```
+
+**3. Stel de GDAP-rolset van de relatie vast** (Partner Center → Customers → Admin relationships). Zonder dat is een 403 straks niet te duiden.
+
+Dan de run, in een eigen PowerShell-venster — niet vanuit de agent, want het aanmeldvenster van WAM komt daar niet naar de voorgrond:
+
+```powershell
+cd D:\Git\claudeprojects\passkeymanager\phase0
+.\Invoke-Phase0Test.ps1 `
+  -CustomerTenantId 0d89711e-71b0-4e19-893a-eba5dbcf7e16 `
+  -UserPrincipalName ChrisG@cwtesttentant.onmicrosoft.com `
+  -KeyVaultName testpasskey `
+  -SubscriptionId bb23ea30-0ac7-4feb-b329-bb311d2322da `
+  -ClientId e3fb0cfc-8a8a-4a5c-aa18-fc9aaa016a8a `
+  -SkipRegistration
+```
 
 **Twee runs, niet één.** Eerst tegen een gewone testgebruiker, daarna tegen een testgebruiker met Global Admin. Voor auth-methoden van een admin-account is Privileged Authentication Administrator nodig in plaats van Authentication Administrator, en dat is het scenario dat in productie geldt. Een geslaagde run tegen een gewone gebruiker bewijst dus minder dan hij lijkt te bewijzen.
 
-Eerst met `-SkipRegistration` om te zien wat er verstuurd zou worden.
+**Overweeg de formaatvraag los te trekken met tijdelijk GA.** Ben je toch al GA via het access package, draai de echte registratie dan één keer in die hoedanigheid. Dan is de rechtenvraag geen variabele meer en meet je puur of Entra het credentialformaat slikt — de vraag waar het hele project op staat of valt. Elke 403 daarna is dan gegarandeerd een rollenprobleem en geen formaatprobleem.
 
 ### Omgeving
 
@@ -36,11 +59,23 @@ Eerst met `-SkipRegistration` om te zien wat er verstuurd zou worden.
 |---|---|
 | Testtenant | `0d89711e-71b0-4e19-893a-eba5dbcf7e16`, benaderd via GDAP |
 | Testgebruiker | `ChrisG@cwtesttentant.onmicrosoft.com` (nog zonder adminrol) |
-| Key Vault | `testpasskey`, subscription `bb23ea30-0ac7-4feb-b329-bb311d2322da` (MSDN) |
+| App-registratie | `e3fb0cfc-8a8a-4a5c-aa18-fc9aaa016a8a`, multi-tenant, public client, delegated |
+| Key Vault | `testpasskey`, RG `rg_ssi_passkeymanager`, subscription `bb23ea30-0ac7-4feb-b329-bb311d2322da` (MSDN), RBAC-modus |
+| Az-account | `s.siemerink@connectworks.nl`, objectId `9e3d0083-8ef0-40c9-82e8-f64467e96340` |
 
 Twee losse logins met twee verschillende accounts: Az met het MSDN-account naar de subscription, Graph met het partner-account naar de testtenant. Tenant en subscription hangen hier niet aan elkaar; het script koppelt ze ook nergens en toetst alleen de subscription.
 
 Dat de vault in een MSDN-subscription staat is voor fase 0 niet bezwaarlijk: Entra ziet alleen de publieke sleutel, dus de tier van de vault raakt de uitkomst niet. De tierkeuze zelf is PRD §14.2.
+
+De app-registratie heeft deze redirect URI's nodig, alle drie, onder *Mobile and desktop applications*, en public client flows aan:
+
+```
+http://localhost
+https://login.microsoftonline.com/common/oauth2/nativeclient
+ms-appx-web://Microsoft.AAD.BrokerPlugin/e3fb0cfc-8a8a-4a5c-aa18-fc9aaa016a8a
+```
+
+Die laatste is hoofdlettergevoelig.
 
 ## Wat er ligt
 
@@ -49,8 +84,10 @@ Dat de vault in een MSDN-subscription staat is voor fase 0 niet bezwaarlijk: Ent
 | PRD | vastgesteld | v1.0, [docs/PRD.md](PRD.md) |
 | CBOR/COSE-encoder | werkt | `phase0/PasskeyManager.Phase0.psm1`, handgeschreven, geen dependencies |
 | Encodertest | slaagt | `phase0/Test-Encoding.ps1`, 30 controles, draait offline |
-| Fase 0-testscript | nagelopen, ongedraaid | `phase0/Invoke-Phase0Test.ps1` — syntax schoon en gereviewd, maar nog nooit tegen een tenant gedraaid |
-| Toegang tot de testtenant | geblokkeerd | Graph komt de tenant niet in; zie hieronder |
+| Fase 0-testscript | draait tot Graph | `phase0/Invoke-Phase0Test.ps1` — preflight en login werken; strandt op het ophalen van het doelaccount |
+| App-registratie | aangemaakt | `e3fb0cfc-…` in de partnertenant, multi-tenant, delegated, drie redirect URI's |
+| Consent in de testtenant | ontbreekt | de app heeft daar nog geen service principal — dit blokkeert nu alles |
+| Key Vault-rechten | ontbreken | Crypto Officer nog niet toegekend |
 | Alles vanaf fase 1 | niets | wacht op de uitkomst van fase 0 |
 
 ## Wat we onderweg zijn tegengekomen
@@ -65,12 +102,28 @@ Dingen die geld of tijd kosten als iemand ze opnieuw moet ontdekken.
 - **Twee rollen voor auth-methoden, niet één.** Authentication Administrator werkt alleen voor niet-admins; voor een admin-doelwit is Privileged Authentication Administrator vereist. Omdat we in productie op Global Admins mikken, is dat de rol die telt — en een zware om over 300 tenants te houden.
 - **Graph PowerShell komt een klanttenant niet zomaar in.** `Connect-MgGraph -TenantId <klant>` geeft *not authorized in the tenant*: het service principal van Microsoft Graph Command Line Tools (`14d82eec-204b-4c2f-b7e8-296a70dab67e`) bestaat daar niet. Dat is app-inrichting en staat los van de GDAP-rechtenvraag van fase 0 — makkelijk te verwarren, want beide melden zich als een autorisatiefout.
 - **En met een GDAP-account krijg je dat niet opgelost.** De consent-URL werkte niet, en het service principal aanmaken via `Invoke-AzRestMethod` op `/servicePrincipals` gaf 403: de GDAP-relatie bevat geen rol die apps mag beheren. Dit is geen randgeval maar een structureel gegeven, en het maakt de eigen multi-tenant app-registratie (zie open vraag 2) de enige werkbare route in plaats van alleen de nettere.
+- **Multi-tenant zijn neemt de per-tenant inrichting níet weg.** Met een eigen multi-tenant app kwamen we wel door de aanmelding, maar Graph gaf daarna `Request_BadRequest: Unsupported token. Unable to initialize the authorization context.` — de app heeft in de klanttenant geen service principal en dus geen autorisatiecontext. Elke klanttenant heeft dus een eenmalige onboarding nodig; GDAP slaat die stap niet over. Over 300 tenants is dat een geautomatiseerde onboardingflow, geen handwerk.
+- **Een redirect URI-fout bewijst niets over de klanttenant.** Die validatie gebeurt tegen de app-registratie in de partnertenant. Tijdens deze sessie is dat signaal eerst verkeerd gelezen als bewijs dat de app in de klanttenant bekend was; dat is het niet.
+- **Redirect URI's zijn hoofdlettergevoelig.** `ms-appx-web://Microsoft.AAD.BrokerPlugin/<clientId>` met exact die schrijfwijze, anders `AADSTS50011`. Neem de string altijd letterlijk uit de foutmelding over.
+- **Owner op de subscription geeft geen Key Vault data plane-rechten.** Bij een vault in RBAC-modus zie je de vault wel maar mag je er geen sleutel in aanmaken. Er is `Key Vault Crypto Officer` op de vault zelf nodig. De preflight controleerde dit aanvankelijk niet en gaf dus groen licht op een run die later alsnog zou stranden; inmiddels gerepareerd.
+- **Het WAM-aanmeldvenster is onbruikbaar vanuit een agent-sessie.** Het opent achter de terminal en wordt na 120 seconden afgebroken met *User canceled authentication*. Draai het script in een eigen PowerShell-venster, of gebruik `-UseDeviceCode`. Device code heeft ook maar 120 seconden, dus zet de aanmeldpagina van tevoren open.
 - **Een magere GDAP-rolset geeft hetzelfde antwoord als een mislukte fase 0.** Zit Privileged Authentication Administrator niet in de relatie, dan faalt de registratie met 403 en noteert het script dat het GDAP-pad niet werkt — terwijl er niets over passkeys bewezen is. Stel de rolset van de relatie dus vast *voordat* je conclusies aan een 403 verbindt.
 
 ## Open vragen, in volgorde van belang
 
 1. **Fase 0-uitkomst** — beide deelvragen, zie PRD §14.1. Blokkeert al het overige.
-2. **Met welke app-identiteit benaderen we een klanttenant?** Nieuw, en het staat inmiddels vast dat het niet met Graph PowerShell kan: die app moet per tenant ingericht worden en een GDAP-account mag dat niet. De richting is een eigen multi-tenant app-registratie in onze partnertenant, één keer geconsent, die via GDAP naar binnen gaat — die bestaat al en wordt al voor ander werk gebruikt. Uitzoeken of dat ook voor de fido2-endpoints opgaat. Voor de testtenant lossen we het eenmalig handmatig op; over 300 tenants is handwerk geen optie.
+2. **Hoe onboarden we een klanttenant, en hoe draait het daarna onbeheerd?** De feiten staan inmiddels vast: Graph PowerShell komt er niet in, een GDAP-account mag geen apps inrichten, en ook een eigen multi-tenant app heeft per klanttenant een service principal nodig. Er is dus onvermijdelijk een eenmalige onboardingstap met verhoogde rechten, gevolgd door een steady state.
+
+   Het beoogde model, nog te verifiëren:
+
+   | | |
+   |---|---|
+   | Onboarding, één keer per klant | delegated via GDAP met tijdelijke verhoging, geautomatiseerd — consent + roltoewijzing aan het service principal |
+   | Productie, dagelijks | app-only client credentials, geen mens in de lus |
+
+   Twee dingen die dat model kunnen breken en die uitgezocht moeten worden: of `UserAuthenticationMethod.ReadWrite.All` als **application**-permissie ook auth-methoden van *privileged* accounts mag wijzigen — Microsoft beperkt dat en wij mikken juist op Global Admins — en of het service principal daarvoor zelf Privileged Authentication Administrator toegewezen moet krijgen. Dat is dezelfde rolvraag als §14.3, maar dan voor een app in plaats van een engineer.
+
+   Voor fase 0 bewust delegated houden: vraag 2 gaat er juist over of een engineer dit via GDAP mág, en met app-only meet je dat niet.
 3. **Graph API-versie en body-vorm** — het script gaat uit van `beta` en van `publicKeyCredential.response.{clientDataJSON,attestationObject}`. Niet geverifieerd; valt uit fase 0 te leren.
 4. **Key Vault-tier** — Premium per sleutel per maand versus Managed HSM vast tarief, bij 1000–2000 sleutels. Ook sleutel- en throttlinglimieten per vault, zo nodig sharden. PRD §14.2.
 5. **GDAP-rolkeuze** per klanttenant voor de registratieflow. PRD §14.3. Hangt samen met 2: de rolset van de relatie bepaalt óók of we er überhaupt een app in kunnen zetten.
@@ -104,3 +157,16 @@ Dingen die geld of tijd kosten als iemand ze opnieuw moet ontdekken.
 - Graph-sessie wordt hergebruikt als die al op de goede tenant staat; scheelt een browserprompt per run.
 - **Deze twee wijzigingen zijn niet meer gecontroleerd.** Geen syntaxcheck, geen encodertest gedraaid. Morgen mee beginnen.
 - Werkafspraak aangescherpt: niets uitvoeren tegen een omgeving zonder dat expliciet vaststaat welke tenant en welke subscription. Dat geldt ook voor read-only verkenning.
+
+### 19 augustus 2026 (avond) — eerste echte runs
+
+Het script heeft voor het eerst tegen een tenant gedraaid. Het is niet tot de registratie-POST gekomen: de hele avond ging op aan toegang krijgen. Dat leverde wel het antwoord op een vraag die we nog niet gesteld hadden.
+
+- Openstaande wijzigingen van gisteren gecontroleerd: syntax schoon, encodertest slaagt (30 controles).
+- Bij het nalopen vier gebreken gevonden en gerepareerd. Het zwaarste: een hergebruikte Graph-sessie werd alleen op tenant getoetst en niet op scopes, waardoor een 403 op de registratie uitgelegd zou worden als "het GDAP-pad werkt niet" terwijl het aan de sessie lag. Verder werd bij een fout alleen de exception message bewaard en niet de response body, waar bij een 400 juist de reden in staat.
+- Omgeving vastgesteld: testtenant, testgebruiker, app-registratie, Key Vault. Zie *Omgeving* hierboven.
+- **Toegang tot de klanttenant bleek de eigenlijke horde.** Achtereenvolgens: Graph PowerShell is niet bekend in de tenant → consent-URL werkt niet met een GDAP-account → service principal aanmaken via de Az-app geeft 403 → eigen multi-tenant app gemaakt → redirect URI's ontbraken → hoofdlettergevoeligheid → login geslaagd → en dan alsnog *Unsupported token, unable to initialize the authorization context*, want ook die app heeft in de klanttenant geen service principal.
+- **Conclusie daaruit, en die is ontwerprelevant:** multi-tenant zijn plus GDAP neemt de per-tenant inrichting niet weg. Elke klanttenant heeft een eenmalige onboarding nodig met verhoogde rechten. Over 300 tenants moet dat een geautomatiseerde flow worden. Opgenomen als open vraag 2, inclusief het onderscheid tussen onboarding (delegated) en steady state (app-only).
+- Preflight gerepareerd: die controleerde de vault met een management-call en gaf daarmee groen licht terwijl `Key Vault Crypto Officer` ontbrak. Owner op de subscription geeft geen data plane-rechten. Nu een echte data plane-call, met een foutmelding die de juiste rol noemt.
+- `-UseDeviceCode` toegevoegd. Het WAM-venster komt vanuit een agent-sessie niet naar de voorgrond en breekt na 120 seconden af. Praktische les: **draai het script in een eigen PowerShell-venster**, niet vanuit de agent.
+- Een eerdere gevolgtrekking in deze sessie was fout en is gecorrigeerd: een redirect URI-fout werd gelezen als bewijs dat de app in de klanttenant bekend was. Die validatie gebeurt in de partnertenant en zegt daar niets over.
