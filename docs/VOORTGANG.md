@@ -14,13 +14,11 @@ Zolang dat zo is, is alles vanaf fase 1 hypothetisch. Niet vooruitbouwen.
 
 ## De volgende stap
 
-Fase 0 daadwerkelijk draaien. Nodig:
+Fase 0 daadwerkelijk draaien. De testtenant is er; de volledige voorwaardenlijst staat in [phase0/README.md](../phase0/README.md).
 
-1. Een testtenant met FIDO2 aan en "Allow self-service setup" ingeschakeld
-2. Een Key Vault waarin sleutels aangemaakt mogen worden (rol *Key Vault Crypto Officer*)
-3. GDAP vanaf het partner-account naar die testtenant — anders is alleen de formaatvraag te beantwoorden en de rechtenvraag niet
+**Twee runs, niet één.** Eerst tegen een gewone testgebruiker, daarna tegen een testgebruiker met Global Admin. Voor auth-methoden van een admin-account is Privileged Authentication Administrator nodig in plaats van Authentication Administrator, en dat is het scenario dat in productie geldt. Een geslaagde run tegen een gewone gebruiker bewijst dus minder dan hij lijkt te bewijzen.
 
-Dan `phase0/Invoke-Phase0Test.ps1`, eerst met `-SkipRegistration`. Zie [phase0/README.md](../phase0/README.md) voor de details en voor hoe je de uitkomst leest.
+Eerst met `-SkipRegistration` om te zien wat er verstuurd zou worden.
 
 ## Wat er ligt
 
@@ -40,6 +38,8 @@ Dingen die geld of tijd kosten als iemand ze opnieuw moet ontdekken.
 - **`Guid.ToByteArray()` is mixed-endian.** WebAuthn wil de AAGUID zoals de GUID geschreven staat. Zonder omkering staat er een andere AAGUID in het credential dan op de allowlist, en dat valt pas bij rapportage op. Afgevangen in `ConvertTo-AaguidBytes`, met een test erop.
 - **EC-coördinaten kunnen korter dan 32 bytes terugkomen** uit Key Vault als ze toevallig met een nulbyte beginnen. Een COSE-sleutel met een 31-byte X wordt afgekeurd. Treedt bij ongeveer 1 op de 256 sleutels op, dus zonder onvoorwaardelijke normalisatie is dit een fout die pas in productie opduikt.
 - **Key Vault tekent ES256 als raw `r || s`,** WebAuthn wil ASN.1 DER in een assertion. Raakt fase 5, staat genoteerd in de fase 0-leesmij.
+- **Sleutelbeperkingen in het FIDO2-beleid vervuilen de fase 0-uitkomst.** Staan ze aan, dan geldt er een AAGUID-allowlist en wordt onze placeholder geweigerd met een 400 die op een formaatfout lijkt. Uit laten tijdens de test.
+- **Twee rollen voor auth-methoden, niet één.** Authentication Administrator werkt alleen voor niet-admins; voor een admin-doelwit is Privileged Authentication Administrator vereist. Omdat we in productie op Global Admins mikken, is dat de rol die telt — en een zware om over 300 tenants te houden.
 
 ## Open vragen, in volgorde van belang
 
@@ -65,3 +65,8 @@ Dingen die geld of tijd kosten als iemand ze opnieuw moet ontdekken.
 - PRD v1.0 vastgelegd. Twee aanpassingen ten opzichte van het aangeleverde concept: fase 0 gesplitst in een formaat- en een rechtenvraag (§7, §11, §14.1), en de `BE`/`BS`-keuze toegelicht in §13 omdat "synced" hier iets anders betekent dan gebruikelijk.
 - Fase 0-code geschreven: encoder, offline test (30 controles, slagen), en het testscript tegen Key Vault en Graph.
 - Nog niet gedraaid tegen een tenant.
+
+### 19 augustus 2026 (vervolg)
+- Testtenant beschikbaar. Voorwaardenlijst uitgewerkt in de fase 0-leesmij; twee voorwaarden waren nog niet in beeld: sleutelbeperkingen uit, en het onderscheid tussen Authentication Administrator en Privileged Authentication Administrator.
+- Script uitgebreid met een preflight (Az-context, modules, bereikbaarheid van de vault) zodat een misconfiguratie faalt vóórdat er een challenge opgehaald is, en met opruimen van de sleutel als de registratie mislukt.
+- Script leest nu de adminrollen van het doelaccount uit en noteert daarmee welk van de twee rolscenario's er getest is.

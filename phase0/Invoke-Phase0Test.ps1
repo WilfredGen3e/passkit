@@ -67,7 +67,8 @@ param(
     [string]$Origin,
     [ValidateSet('beta', 'v1.0')][string]$GraphApiVersion = 'beta',
     [string]$ResultPath,
-    [switch]$SkipRegistration
+    [switch]$SkipRegistration,
+    [switch]$KeepKeyOnFailure
 )
 
 Set-StrictMode -Version Latest
@@ -119,6 +120,43 @@ if ($Aaguid -eq [guid]::Empty) {
 try {
 
     # ------------------------------------------------------------------
+    Write-Step 'Preflight'
+    # ------------------------------------------------------------------
+    # Alles controleren wat zonder neveneffecten te controleren is, voordat er
+    # een challenge opgehaald wordt. De challenge verloopt en een halve run
+    # laat een ongebruikte sleutel in de vault achter; beide zijn te vermijden
+    # door hier te falen in plaats van halverwege.
+
+    foreach ($module in 'Az.KeyVault', 'Microsoft.Graph.Authentication') {
+        if (-not (Get-Module -ListAvailable -Name $module)) {
+            throw "Module $module ontbreekt. Installeer met: Install-Module $module -Scope CurrentUser"
+        }
+    }
+
+    $azContext = Get-AzContext
+    if (-not $azContext) {
+        throw 'Geen Azure-context. Draai eerst Connect-AzAccount tegen de tenant waar de Key Vault staat (onze eigen tenant, niet de klanttenant).'
+    }
+    Write-Host "   Az        : $($azContext.Account.Id) / $($azContext.Subscription.Name)"
+
+    # Leesbaarheid van de vault nu vaststellen, niet straks. Faalt dit op
+    # rechten, dan ontbreekt Key Vault Crypto Officer.
+    try {
+        $vault = Get-AzKeyVault -VaultName $KeyVaultName -ErrorAction Stop
+        if (-not $vault) { throw "Key Vault $KeyVaultName niet gevonden." }
+        Write-Host "   Key Vault : $($vault.VaultUri)"
+    }
+    catch {
+        throw "Key Vault '$KeyVaultName' niet bereikbaar: $($_.Exception.Message)"
+    }
+
+    $result.steps.preflight = [ordered]@{
+        azAccount    = $azContext.Account.Id
+        subscription = $azContext.Subscription.Name
+        vaultUri     = $vault.VaultUri
+    }
+
+    # ------------------------------------------------------------------
     Write-Step 'Verbinden met Graph tegen de klanttenant'
     # ------------------------------------------------------------------
     # Dit is de GDAP-vraag in de praktijk: inloggen met je partner-account, maar
@@ -149,6 +187,31 @@ try {
         userPrincipalName = $user.userPrincipalName
     }
     Write-Host "   $($user.userPrincipalName) ($($user.id))"
+
+    # Heeft het doelaccount zelf een adminrol? Dat bepaalt welke rol je nodig
+    # hebt: Authentication Administrator volstaat alleen voor niet-admins, voor
+    # een admin-doelwit is Privileged Authentication Administrator vereist. In
+    # productie mikken we op Global Admins, dus een test tegen een gewone
+    # gebruiker bewijst minder dan hij lijkt te bewijzen (PRD §14.3).
+    try {
+        $roles = Invoke-MgGraphRequest -Method GET `
+            -Uri "$GraphApiVersion/users/$($user.id)/transitiveMemberOf/microsoft.graph.directoryRole" `
+            -OutputType PSObject
+        $roleNames = @($roles.value | ForEach-Object { $_.displayName })
+        $result.steps.user.directoryRoles = $roleNames
+
+        if ($roleNames.Count -gt 0) {
+            Write-Host "   adminrollen    : $($roleNames -join ', ')"
+            Add-Note "Het doelaccount heeft adminrollen ($($roleNames -join ', ')). Er is dan Privileged Authentication Administrator nodig, niet Authentication Administrator. Dit is het scenario dat in productie geldt."
+        }
+        else {
+            Write-Host '   adminrollen    : geen'
+            Add-Note 'Het doelaccount heeft geen adminrollen. Slaagt de test, dan is daarmee nog niet bewezen dat het ook voor een Global Admin werkt — herhaal tegen een admin-doelwit voordat je fase 0 afvinkt.'
+        }
+    }
+    catch {
+        Add-Note "Kon de adminrollen van het doelaccount niet uitlezen: $($_.Exception.Message). Daarmee blijft onbekend welke rol er nodig is."
+    }
 
     # ------------------------------------------------------------------
     Write-Step 'creationOptions opvragen'
@@ -313,6 +376,24 @@ try {
 
         Write-Host ''
         Write-Host "Registratie mislukt: $graphError" -ForegroundColor Red
+
+        # De sleutel is seconden oud, hoort bij een registratie die niet bestaat
+        # en zou bij herhaald testen als ruis in de vault achterblijven. Opruimen
+        # is veilig: Key Vault houdt hem soft-deleted, dus terughalen kan.
+        if ($KeepKeyOnFailure) {
+            Write-Host "Sleutel $KeyName blijft staan (KeepKeyOnFailure)." -ForegroundColor Yellow
+        }
+        else {
+            try {
+                Remove-AzKeyVaultKey -VaultName $KeyVaultName -Name $KeyName -Force -Confirm:$false
+                $result.steps.keyVaultKey.cleanedUp = $true
+                Write-Host "Ongebruikte sleutel $KeyName opgeruimd (soft-deleted)."
+            }
+            catch {
+                $result.steps.keyVaultKey.cleanedUp = $false
+                Add-Note "Opruimen van sleutel $KeyName mislukt: $($_.Exception.Message). Verwijder hem handmatig."
+            }
+        }
     }
 }
 finally {

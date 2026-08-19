@@ -28,12 +28,49 @@ Draai dit voordat je de echte test doet. Een fout in de handgeschreven CBOR komt
 
 ## Voorbereiding
 
+### Op je werkplek
+
 - PowerShell 7
 - Modules `Az.KeyVault` en `Microsoft.Graph.Authentication`
-- Een **testtenant**, niet een klanttenant
-- Een Key Vault waarin je sleutels mag aanmaken (rol *Key Vault Crypto Officer*)
-- In de doeltenant: FIDO2 als authenticatiemethode aan, met "Allow self-service setup"
-- Voor de rechtenvraag: GDAP naar die tenant vanaf je partner-account
+- `Connect-AzAccount` naar **onze eigen** tenant, waar de Key Vault staat
+
+Let op dat dit twee verschillende tenants zijn: Az wijst naar onze tenant, Graph naar de klant. Het script controleert dat vooraf.
+
+### In de testtenant — authenticatiemethoden, Passkey (FIDO2)
+
+| Instelling | Waarde | Waarom |
+|---|---|---|
+| Inschakelen | Ja | |
+| Doelgroep | het testaccount, of Alle gebruikers | de methode aan zetten is niet genoeg, het account moet ook in de doelgroep vallen |
+| Attestatie afdwingen | **Nee** | Entra kan op synced passkeys toch niets verifiëren (PRD §4.3) |
+| Sleutelbeperkingen afdwingen | **Nee** | anders geldt er een AAGUID-allowlist en wordt onze placeholder geweigerd — je krijgt dan een 400 die op een formaatfout lijkt maar beleid is |
+| Self-service setup toestaan | **Ja** | de provisioning-API is op zelfregistratie geënt |
+
+Die laatste twee zijn de makkelijkst te vergeten voorwaarden en allebei kunnen ze de uitkomst van fase 0 verkeerd doen lijken.
+
+### GDAP-rol — bepaalt wat de test bewijst
+
+Voor het beheren van authenticatiemethoden bestaan twee rollen, en het verschil is hier wezenlijk:
+
+| Rol | Mag auth-methoden beheren van |
+|---|---|
+| Authentication Administrator | niet-admin gebruikers |
+| **Privileged Authentication Administrator** | ook accounts die zelf een adminrol hebben |
+
+In productie mikken we op **Global Admins** in klanttenants. Slaagt de test tegen een gewone gebruiker met Authentication Administrator, dan is daarmee dus niets bewezen over het echte scenario.
+
+**Draai de test daarom twee keer:** eerst tegen een gewone testgebruiker, daarna tegen een testgebruiker die je Global Admin hebt gemaakt. Het verschil tussen die runs is de eigenlijke opbrengst. Het script leest de adminrollen van het doelaccount uit en zet in het resultaatbestand welk van de twee scenario's je getest hebt.
+
+Structureel Privileged Authentication Administrator houden over 300 tenants is een zware keuze. Dat is openstaand punt PRD §14.3, en fase 0 levert de feiten om die keuze te maken.
+
+Verder: je partner-account moet lid zijn van de security group die aan de GDAP-rol hangt, en roltoewijzingen hebben even nodig om door te werken.
+
+### Key Vault
+
+- Rol *Key Vault Crypto Officer* op de vault (of Create/Get bij access policies)
+- Geen firewall of private endpoint die je machine buitensluit
+
+Mislukt de registratie, dan ruimt het script de zojuist aangemaakte sleutel weer op — hij is soft-deleted en dus terug te halen. Met `-KeepKeyOnFailure` blijft hij staan.
 
 ## Draaien
 
