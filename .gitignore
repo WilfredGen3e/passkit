@@ -1,0 +1,10 @@
+# Resultaatbestanden van fase 0-runs: bevatten tenant-ID's, UPN's en
+# credential-metadata van testtenants. Bewaar ze buiten git.
+phase0/results/
+
+# Lokale Claude Code-instellingen
+.claude/settings.local.json
+
+# Azure / PowerShell
+*.publishsettings
+.azure/

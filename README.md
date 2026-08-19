@@ -8,8 +8,12 @@ Kern van het ontwerp: **de private key verlaat Key Vault nooit.** De backend is 
 
 ## Documentatie
 
-- [PRD](docs/PRD.md) — volledige productdefinitie, ontwerpbeslissingen, architectuur en fasering
+| | |
+|---|---|
+| [PRD](docs/PRD.md) | Productdefinitie, ontwerpbeslissingen, architectuur, fasering |
+| [Voortgang](docs/VOORTGANG.md) | Waar we staan en wat de volgende stap is — **lees dit eerst** |
+| [Fase 0](phase0/README.md) | De test die bepaalt of de rest zin heeft |
 
 ## Status
 
-Fase 0 — nog te bevestigen dat Entra een volledig in software gegenereerde credential accepteert via de provisioning-API. Zolang dat niet vaststaat is de rest van de bouw hypothetisch.
+Fase 0, nog niet uitgevoerd. De testcode ligt er en is offline gevalideerd, maar er is nog niet tegen een tenant aan gedraaid. Zolang niet vaststaat dat Entra een volledig in software gegenereerde credential accepteert — en dat dat met alleen GDAP-rechten kan — is de rest van de bouw hypothetisch.
