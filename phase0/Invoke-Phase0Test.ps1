@@ -120,13 +120,19 @@ function Get-Prop {
     $prop.Value
 }
 
-# Scopes die de test nodig heeft. UserAuthenticationMethod.ReadWrite.All voor de
-# registratie zelf, Directory.Read.All om de adminrollen van het doelaccount uit
-# te lezen — zonder die laatste blijft onbekend welk van de twee rolscenario's
-# we getest hebben, en dat is de eigenlijke opbrengst van de tweede run.
+# Zonder deze twee valt er niets te testen.
 $requiredScopes = @(
     'UserAuthenticationMethod.ReadWrite.All'
     'User.Read.All'
+)
+
+# Directory.Read.All is voor het uitlezen van de adminrollen van het doelaccount,
+# waarmee het resultaatbestand kan noteren welk van de twee rolscenario's er
+# getest is. Nuttig, maar geen onderdeel van de test zelf — en we benaderen de
+# tenant via GDAP, waar niet gezegd is dat de rollen in de relatie directory-
+# lezen toestaan. Dus wel vragen, niet op afdwingen: een bijzaak hoort de run
+# niet te blokkeren.
+$optionalScopes = @(
     'Directory.Read.All'
 )
 
@@ -227,17 +233,28 @@ Wissel met: Set-AzContext -SubscriptionId $SubscriptionId
     }
 
     if (-not $reusable) {
-        Connect-MgGraph -TenantId $CustomerTenantId -Scopes $requiredScopes -NoWelcome
+        try {
+            Connect-MgGraph -TenantId $CustomerTenantId -Scopes ($requiredScopes + $optionalScopes) -NoWelcome
+        }
+        catch {
+            # Struikelt de consent over Directory.Read.All, dan is dat geen reden
+            # om de test niet te doen. Opnieuw proberen met alleen het nodige.
+            Add-Note "Verbinden met alle scopes mislukte ($($_.Exception.Message)). Opnieuw geprobeerd zonder de optionele scopes; de rollen van het doelaccount blijven dan onbekend."
+            Connect-MgGraph -TenantId $CustomerTenantId -Scopes $requiredScopes -NoWelcome
+        }
         $context = Get-MgContext
     }
 
-    # Toestemming geven is niet hetzelfde als toestemming krijgen: bij een
-    # consent-prompt kan de gebruiker een deel weigeren, en dan komt de sessie
-    # met minder scopes terug dan gevraagd.
+    # Toestemming vragen is niet hetzelfde als toestemming krijgen: bij een
+    # consent-prompt kan een deel geweigerd worden, en dan komt de sessie met
+    # minder scopes terug dan gevraagd.
     $granted = @($context.Scopes)
     $stillMissing = @($requiredScopes | Where-Object { $_ -notin $granted })
     if ($stillMissing.Count -gt 0) {
-        Add-Note "De Graph-sessie mist scopes: $($stillMissing -join ', '). Een 401/403 hierna zegt dan niets over het GDAP-pad, want de sessie zelf is al ontoereikend."
+        Add-Note "De Graph-sessie mist scopes die de test nodig heeft: $($stillMissing -join ', '). Een 401/403 hierna zegt dan niets over het GDAP-pad, want de sessie zelf is al ontoereikend."
+    }
+    if ('Directory.Read.All' -notin $granted) {
+        Add-Note 'Geen Directory.Read.All in de sessie. De adminrollen van het doelaccount zijn dan niet uit te lezen; noteer handmatig of het doelwit een adminrol heeft, want dat bepaalt wat de run bewijst.'
     }
     $result.steps.graphContext = [ordered]@{
         account  = $context.Account
