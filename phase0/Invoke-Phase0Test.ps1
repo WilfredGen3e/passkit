@@ -49,6 +49,13 @@
     actieve Az-context. Zonder deze controle pakt het script stilzwijgend welke
     context er toevallig actief is, en dat kan een klantomgeving zijn.
 
+.PARAMETER ClientId
+    App-ID van onze eigen multi-tenant app-registratie. Zonder deze parameter
+    gebruikt Connect-MgGraph de Microsoft Graph Command Line Tools-app, en die
+    moet per klanttenant apart ingericht worden — wat een GDAP-account niet mag.
+    Onze eigen app is bedoeld om dat te omzeilen: eenmalig geconsent in de
+    partnertenant, en via GDAP de klanttenants in.
+
 .PARAMETER SkipRegistration
     Alles opbouwen en wegschrijven, maar niet daadwerkelijk POSTen. Handig om
     eerst te zien wat er verstuurd zou worden.
@@ -67,6 +74,7 @@ param(
     [Parameter(Mandatory)][string]$KeyVaultName,
     [Parameter(Mandatory)][string]$SubscriptionId,
 
+    [string]$ClientId,
     [string]$KeyName,
     [string]$DisplayName = 'Passkey Manager fase 0-test',
     [guid]$Aaguid = '00000000-0000-0000-0000-000000000000',
@@ -233,14 +241,26 @@ Wissel met: Set-AzContext -SubscriptionId $SubscriptionId
     }
 
     if (-not $reusable) {
+        $connectArgs = @{
+            TenantId  = $CustomerTenantId
+            NoWelcome = $true
+        }
+        if ($ClientId) {
+            $connectArgs.ClientId = $ClientId
+            Write-Host "   app-registratie: $ClientId"
+        }
+        else {
+            Add-Note 'Geen -ClientId opgegeven, dus Connect-MgGraph gebruikt de Microsoft Graph Command Line Tools-app. Die moet per klanttenant apart ingericht worden en een GDAP-account mag dat niet; verwacht hier een autorisatiefout die niets over passkeys zegt.'
+        }
+
         try {
-            Connect-MgGraph -TenantId $CustomerTenantId -Scopes ($requiredScopes + $optionalScopes) -NoWelcome
+            Connect-MgGraph @connectArgs -Scopes ($requiredScopes + $optionalScopes)
         }
         catch {
             # Struikelt de consent over Directory.Read.All, dan is dat geen reden
             # om de test niet te doen. Opnieuw proberen met alleen het nodige.
             Add-Note "Verbinden met alle scopes mislukte ($($_.Exception.Message)). Opnieuw geprobeerd zonder de optionele scopes; de rollen van het doelaccount blijven dan onbekend."
-            Connect-MgGraph -TenantId $CustomerTenantId -Scopes $requiredScopes -NoWelcome
+            Connect-MgGraph @connectArgs -Scopes $requiredScopes
         }
         $context = Get-MgContext
     }

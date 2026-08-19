@@ -8,27 +8,39 @@ Werkdocument om het project tussen sessies over te kunnen dragen. Wie hier koud 
 
 ## Waar we nu staan
 
-**Fase 0, nog niet uitgevoerd.** De code om de test te doen ligt er en is offline gevalideerd, maar er is nog niet één keer echt tegen een tenant aan gedraaid. Daarmee is de kernvraag van het hele project onbeantwoord: accepteert Entra een passkey die nooit in een authenticator heeft gezeten?
+**Fase 0, nog niet uitgevoerd.** De code om de test te doen ligt er, is nagelopen en offline gevalideerd, maar er is nog niet één keer echt tegen een tenant aan gedraaid. Daarmee is de kernvraag van het hele project onbeantwoord: accepteert Entra een passkey die nooit in een authenticator heeft gezeten?
 
 Zolang dat zo is, is alles vanaf fase 1 hypothetisch. Niet vooruitbouwen.
 
+De omgeving staat inmiddels wel klaar en de parameters zijn bekend. We zijn blijven steken op app-consent in de testtenant — een inrichtingsstap vóór de eigenlijke test.
+
 ## De volgende stap
 
-**Begin met een syntaxcontrole en `Test-Encoding.ps1`.** De laatste wijzigingen aan `Invoke-Phase0Test.ps1` (verplichte `-SubscriptionId`, hergebruik van een bestaande Graph-sessie) zijn geschreven maar niet meer gecontroleerd voordat we stopten. Doe dat eerst.
+**Admin consent voor Graph Command Line Tools in de testtenant.** Daar loopt het nu op vast: `Connect-MgGraph` tegen de testtenant geeft *not authorized in the tenant*, want het service principal van die app bestaat daar niet. Consent-URL:
 
-Daarna fase 0 draaien. Testtenant en Key Vault staan klaar; de volledige voorwaardenlijst staat in [phase0/README.md](../phase0/README.md).
+```
+https://login.microsoftonline.com/<tenantId>/adminconsent?client_id=14d82eec-204b-4c2f-b7e8-296a70dab67e
+```
 
-Nog aan te leveren voordat er iets kan draaien:
+Dat is tenantinrichting, geen onderdeel van wat fase 0 meet — zie de bevinding hieronder, want voor productie is dit wél een ontwerpvraag.
 
-| | |
-|---|---|
-| Tenant-ID | van de testtenant |
-| UPN | van het testaccount |
-| Subscription-ID + vaultnaam | van de Key Vault in onze eigen tenant |
+Daarna de droge run, dan de echte. De parameters staan vast (zie hieronder), het script is nagelopen en de encodertest slaagt.
 
 **Twee runs, niet één.** Eerst tegen een gewone testgebruiker, daarna tegen een testgebruiker met Global Admin. Voor auth-methoden van een admin-account is Privileged Authentication Administrator nodig in plaats van Authentication Administrator, en dat is het scenario dat in productie geldt. Een geslaagde run tegen een gewone gebruiker bewijst dus minder dan hij lijkt te bewijzen.
 
 Eerst met `-SkipRegistration` om te zien wat er verstuurd zou worden.
+
+### Omgeving
+
+| | |
+|---|---|
+| Testtenant | `0d89711e-71b0-4e19-893a-eba5dbcf7e16`, benaderd via GDAP |
+| Testgebruiker | `ChrisG@cwtesttentant.onmicrosoft.com` (nog zonder adminrol) |
+| Key Vault | `testpasskey`, subscription `bb23ea30-0ac7-4feb-b329-bb311d2322da` (MSDN) |
+
+Twee losse logins met twee verschillende accounts: Az met het MSDN-account naar de subscription, Graph met het partner-account naar de testtenant. Tenant en subscription hangen hier niet aan elkaar; het script koppelt ze ook nergens en toetst alleen de subscription.
+
+Dat de vault in een MSDN-subscription staat is voor fase 0 niet bezwaarlijk: Entra ziet alleen de publieke sleutel, dus de tier van de vault raakt de uitkomst niet. De tierkeuze zelf is PRD §14.2.
 
 ## Wat er ligt
 
@@ -37,7 +49,8 @@ Eerst met `-SkipRegistration` om te zien wat er verstuurd zou worden.
 | PRD | vastgesteld | v1.0, [docs/PRD.md](PRD.md) |
 | CBOR/COSE-encoder | werkt | `phase0/PasskeyManager.Phase0.psm1`, handgeschreven, geen dependencies |
 | Encodertest | slaagt | `phase0/Test-Encoding.ps1`, 30 controles, draait offline |
-| Fase 0-testscript | geschreven, ongetest | `phase0/Invoke-Phase0Test.ps1` — nooit tegen een tenant gedraaid, en de laatste wijzigingen zijn niet eens syntactisch gecontroleerd |
+| Fase 0-testscript | nagelopen, ongedraaid | `phase0/Invoke-Phase0Test.ps1` — syntax schoon en gereviewd, maar nog nooit tegen een tenant gedraaid |
+| Toegang tot de testtenant | geblokkeerd | Graph komt de tenant niet in; zie hieronder |
 | Alles vanaf fase 1 | niets | wacht op de uitkomst van fase 0 |
 
 ## Wat we onderweg zijn tegengekomen
@@ -50,14 +63,18 @@ Dingen die geld of tijd kosten als iemand ze opnieuw moet ontdekken.
 - **Key Vault tekent ES256 als raw `r || s`,** WebAuthn wil ASN.1 DER in een assertion. Raakt fase 5, staat genoteerd in de fase 0-leesmij.
 - **Sleutelbeperkingen in het FIDO2-beleid vervuilen de fase 0-uitkomst.** Staan ze aan, dan geldt er een AAGUID-allowlist en wordt onze placeholder geweigerd met een 400 die op een formaatfout lijkt. Uit laten tijdens de test.
 - **Twee rollen voor auth-methoden, niet één.** Authentication Administrator werkt alleen voor niet-admins; voor een admin-doelwit is Privileged Authentication Administrator vereist. Omdat we in productie op Global Admins mikken, is dat de rol die telt — en een zware om over 300 tenants te houden.
+- **Graph PowerShell komt een klanttenant niet zomaar in.** `Connect-MgGraph -TenantId <klant>` geeft *not authorized in the tenant*: het service principal van Microsoft Graph Command Line Tools (`14d82eec-204b-4c2f-b7e8-296a70dab67e`) bestaat daar niet. Dat is app-inrichting en staat los van de GDAP-rechtenvraag van fase 0 — makkelijk te verwarren, want beide melden zich als een autorisatiefout.
+- **En met een GDAP-account krijg je dat niet opgelost.** De consent-URL werkte niet, en het service principal aanmaken via `Invoke-AzRestMethod` op `/servicePrincipals` gaf 403: de GDAP-relatie bevat geen rol die apps mag beheren. Dit is geen randgeval maar een structureel gegeven, en het maakt de eigen multi-tenant app-registratie (zie open vraag 2) de enige werkbare route in plaats van alleen de nettere.
+- **Een magere GDAP-rolset geeft hetzelfde antwoord als een mislukte fase 0.** Zit Privileged Authentication Administrator niet in de relatie, dan faalt de registratie met 403 en noteert het script dat het GDAP-pad niet werkt — terwijl er niets over passkeys bewezen is. Stel de rolset van de relatie dus vast *voordat* je conclusies aan een 403 verbindt.
 
 ## Open vragen, in volgorde van belang
 
 1. **Fase 0-uitkomst** — beide deelvragen, zie PRD §14.1. Blokkeert al het overige.
-2. **Graph API-versie en body-vorm** — het script gaat uit van `beta` en van `publicKeyCredential.response.{clientDataJSON,attestationObject}`. Niet geverifieerd; valt uit fase 0 te leren.
-3. **Key Vault-tier** — Premium per sleutel per maand versus Managed HSM vast tarief, bij 1000–2000 sleutels. Ook sleutel- en throttlinglimieten per vault, zo nodig sharden. PRD §14.2.
-4. **GDAP-rolkeuze** per klanttenant voor de registratieflow. PRD §14.3.
-5. De rest van PRD §14.
+2. **Met welke app-identiteit benaderen we een klanttenant?** Nieuw, en het staat inmiddels vast dat het niet met Graph PowerShell kan: die app moet per tenant ingericht worden en een GDAP-account mag dat niet. De richting is een eigen multi-tenant app-registratie in onze partnertenant, één keer geconsent, die via GDAP naar binnen gaat — die bestaat al en wordt al voor ander werk gebruikt. Uitzoeken of dat ook voor de fido2-endpoints opgaat. Voor de testtenant lossen we het eenmalig handmatig op; over 300 tenants is handwerk geen optie.
+3. **Graph API-versie en body-vorm** — het script gaat uit van `beta` en van `publicKeyCredential.response.{clientDataJSON,attestationObject}`. Niet geverifieerd; valt uit fase 0 te leren.
+4. **Key Vault-tier** — Premium per sleutel per maand versus Managed HSM vast tarief, bij 1000–2000 sleutels. Ook sleutel- en throttlinglimieten per vault, zo nodig sharden. PRD §14.2.
+5. **GDAP-rolkeuze** per klanttenant voor de registratieflow. PRD §14.3. Hangt samen met 2: de rolset van de relatie bepaalt óók of we er überhaupt een app in kunnen zetten.
+6. De rest van PRD §14.
 
 ## Afspraken over dit project
 
