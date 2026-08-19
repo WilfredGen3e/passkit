@@ -108,6 +108,28 @@ function Add-Note {
     Write-Host "   ! $Text" -ForegroundColor Yellow
 }
 
+# Set-StrictMode laat een ontbrekende property een terminating error worden. Voor
+# een response waarvan we de vorm juist nog niet kennen — dat is wat fase 0
+# uitzoekt — is dat het verkeerde gedrag: dan klapt het script op een optioneel
+# veld nadat de challenge al opgehaald is.
+function Get-Prop {
+    param($Object, [string]$Name, $Default = $null)
+    if ($null -eq $Object) { return $Default }
+    $prop = $Object.PSObject.Properties[$Name]
+    if ($null -eq $prop) { return $Default }
+    $prop.Value
+}
+
+# Scopes die de test nodig heeft. UserAuthenticationMethod.ReadWrite.All voor de
+# registratie zelf, Directory.Read.All om de adminrollen van het doelaccount uit
+# te lezen — zonder die laatste blijft onbekend welk van de twee rolscenario's
+# we getest hebben, en dat is de eigenlijke opbrengst van de tweede run.
+$requiredScopes = @(
+    'UserAuthenticationMethod.ReadWrite.All'
+    'User.Read.All'
+    'Directory.Read.All'
+)
+
 if (-not $KeyName) {
     $KeyName = 'phase0-{0}-{1}' -f ($UserPrincipalName -replace '[^a-zA-Z0-9]', '-'), (Get-Date -Format 'yyyyMMddHHmmss')
     if ($KeyName.Length -gt 127) { $KeyName = $KeyName.Substring(0, 127) }
@@ -147,16 +169,18 @@ try {
     # Harde toets in plaats van pakken wat er toevallig actief is. Een sessie die
     # nog op een klantomgeving staat is een reeel scenario en het gevolg zou zijn
     # dat we daar een sleutel aanmaken.
-    if ($azContext.Subscription.Id -ne $SubscriptionId) {
+    $activeSubId = Get-Prop (Get-Prop $azContext 'Subscription') 'Id'
+    $activeSubName = Get-Prop (Get-Prop $azContext 'Subscription') 'Name' '<geen>'
+    if ($activeSubId -ne $SubscriptionId) {
         throw @"
 Actieve Az-context staat op een andere subscription dan opgegeven.
-  actief    : $($azContext.Subscription.Name) ($($azContext.Subscription.Id))
+  actief    : $activeSubName ($activeSubId)
   verwacht  : $SubscriptionId
 Wissel met: Set-AzContext -SubscriptionId $SubscriptionId
 "@
     }
     Write-Host "   Az        : $($azContext.Account.Id)"
-    Write-Host "   sub       : $($azContext.Subscription.Name) ($($azContext.Subscription.Id))"
+    Write-Host "   sub       : $activeSubName ($activeSubId)"
 
     # Leesbaarheid van de vault nu vaststellen, niet straks. Faalt dit op
     # rechten, dan ontbreekt Key Vault Crypto Officer.
@@ -171,7 +195,8 @@ Wissel met: Set-AzContext -SubscriptionId $SubscriptionId
 
     $result.steps.preflight = [ordered]@{
         azAccount    = $azContext.Account.Id
-        subscription = $azContext.Subscription.Name
+        subscription = $activeSubName
+        subscriptionId = $activeSubId
         vaultUri     = $vault.VaultUri
     }
 
@@ -182,15 +207,37 @@ Wissel met: Set-AzContext -SubscriptionId $SubscriptionId
     # met -TenantId van de klant. Lukt de connect maar faalt straks de POST met
     # 403, dan is dat het antwoord op vraag 2.
 
-    # Een bestaande sessie op dezelfde tenant hergebruiken. Scheelt een
-    # browserprompt per run, en bij herhaald testen zijn dat er veel.
+    # Een bestaande sessie op dezelfde tenant hergebruiken scheelt een
+    # browserprompt per run, en bij herhaald testen zijn dat er veel. Maar alleen
+    # als die sessie ook alle scopes heeft: een sessie met te weinig scopes geeft
+    # straks een 403 op de registratie, en dit script zou die 403 uitleggen als
+    # "het GDAP-pad werkt niet" terwijl het aan de sessie ligt. Dat is precies de
+    # verwarring die fase 0 moet uitsluiten, dus hier hard op toetsen.
     $context = Get-MgContext
+    $reusable = $false
     if ($context -and $context.TenantId -eq $CustomerTenantId.ToString()) {
-        Write-Host '   bestaande Graph-sessie hergebruikt'
+        $missing = @($requiredScopes | Where-Object { $_ -notin @($context.Scopes) })
+        if ($missing.Count -eq 0) {
+            $reusable = $true
+            Write-Host '   bestaande Graph-sessie hergebruikt'
+        }
+        else {
+            Write-Host "   bestaande sessie mist scopes ($($missing -join ', ')); opnieuw verbinden"
+        }
     }
-    else {
-        Connect-MgGraph -TenantId $CustomerTenantId -Scopes 'UserAuthenticationMethod.ReadWrite.All', 'User.Read.All' -NoWelcome
+
+    if (-not $reusable) {
+        Connect-MgGraph -TenantId $CustomerTenantId -Scopes $requiredScopes -NoWelcome
         $context = Get-MgContext
+    }
+
+    # Toestemming geven is niet hetzelfde als toestemming krijgen: bij een
+    # consent-prompt kan de gebruiker een deel weigeren, en dan komt de sessie
+    # met minder scopes terug dan gevraagd.
+    $granted = @($context.Scopes)
+    $stillMissing = @($requiredScopes | Where-Object { $_ -notin $granted })
+    if ($stillMissing.Count -gt 0) {
+        Add-Note "De Graph-sessie mist scopes: $($stillMissing -join ', '). Een 401/403 hierna zegt dan niets over het GDAP-pad, want de sessie zelf is al ontoereikend."
     }
     $result.steps.graphContext = [ordered]@{
         account  = $context.Account
@@ -223,7 +270,7 @@ Wissel met: Set-AzContext -SubscriptionId $SubscriptionId
         $roles = Invoke-MgGraphRequest -Method GET `
             -Uri "$GraphApiVersion/users/$($user.id)/transitiveMemberOf/microsoft.graph.directoryRole" `
             -OutputType PSObject
-        $roleNames = @($roles.value | ForEach-Object { $_.displayName })
+        $roleNames = @(Get-Prop $roles 'value' @() | ForEach-Object { Get-Prop $_ 'displayName' })
         $result.steps.user.directoryRoles = $roleNames
 
         if ($roleNames.Count -gt 0) {
@@ -249,20 +296,32 @@ Wissel met: Set-AzContext -SubscriptionId $SubscriptionId
     $options = Invoke-MgGraphRequest -Method GET -Uri $optionsUri -OutputType PSObject
     $result.steps.creationOptions = $options
 
-    $publicKeyOptions = $options.publicKey
-    $rpId = $publicKeyOptions.rp.id
-    $challenge = $publicKeyOptions.challenge
+    # De vorm van deze response is een van de dingen die fase 0 vaststelt, dus
+    # hier niet aannemen dat velden bestaan.
+    $publicKeyOptions = Get-Prop $options 'publicKey'
+    if (-not $publicKeyOptions) {
+        throw "creationOptions bevat geen 'publicKey'. Ontvangen velden: $(($options.PSObject.Properties.Name) -join ', '). Zie het resultaatbestand."
+    }
+
+    $rpId = Get-Prop (Get-Prop $publicKeyOptions 'rp') 'id'
+    $challenge = Get-Prop $publicKeyOptions 'challenge'
+    $attestation = Get-Prop $publicKeyOptions 'attestation'
+    $credParams = @(Get-Prop $publicKeyOptions 'pubKeyCredParams' @())
+
+    if (-not $rpId) { throw "creationOptions bevat geen rp.id; zonder RP ID is er geen geldige authenticatorData op te bouwen." }
+    if (-not $challenge) { throw "creationOptions bevat geen challenge." }
+
+    $algs = @($credParams | ForEach-Object { Get-Prop $_ 'alg' })
 
     Write-Host "   RP ID          : $rpId"
     Write-Host "   challenge      : $challenge"
-    Write-Host "   attestation    : $($publicKeyOptions.attestation)"
-    Write-Host "   pubKeyCredParams: $(($publicKeyOptions.pubKeyCredParams | ForEach-Object { $_.alg }) -join ', ')"
+    Write-Host "   attestation    : $attestation"
+    Write-Host "   pubKeyCredParams: $($algs -join ', ')"
 
-    if ($publicKeyOptions.attestation -and $publicKeyOptions.attestation -ne 'none') {
-        Add-Note "De tenant vraagt attestation '$($publicKeyOptions.attestation)'. We leveren 'none'; dat is toegestaan omdat de RP niet mag afdwingen wat de authenticator teruggeeft, maar als de POST hierop faalt is dat de verklaring."
+    if ($attestation -and $attestation -ne 'none') {
+        Add-Note "De tenant vraagt attestation '$attestation'. We leveren 'none'; dat is toegestaan omdat de RP niet mag afdwingen wat de authenticator teruggeeft, maar als de POST hierop faalt is dat de verklaring."
     }
 
-    $algs = @($publicKeyOptions.pubKeyCredParams | ForEach-Object { $_.alg })
     if ($algs -notcontains -7) {
         Add-Note "ES256 (-7) staat niet in pubKeyCredParams: $($algs -join ', '). Dan klopt de aanname in PRD §13 niet."
     }
@@ -372,13 +431,51 @@ Wissel met: Set-AzContext -SubscriptionId $SubscriptionId
     catch {
         $status = $null
         $graphError = $_.Exception.Message
-        if ($_.Exception.PSObject.Properties.Name -contains 'Response' -and $_.Exception.Response) {
-            $status = [int]$_.Exception.Response.StatusCode
+        $errorBody = $null
+        $errorCode = $null
+
+        $response = Get-Prop $_.Exception 'Response'
+        if ($response) {
+            $statusValue = Get-Prop $response 'StatusCode'
+            if ($null -ne $statusValue) { $status = [int]$statusValue }
+        }
+
+        # Bij een 400 staat de reden in de body, niet in de message. Dat is de
+        # onderbouwing van de fase 0-conclusie: welk veld keurt Entra af? Zonder
+        # deze bytes is een 400 niet meer dan "iets klopte niet".
+        if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+            $errorBody = $_.ErrorDetails.Message
+        }
+        elseif ($response) {
+            try {
+                $content = Get-Prop $response 'Content'
+                if ($content) { $errorBody = $content.ReadAsStringAsync().GetAwaiter().GetResult() }
+            }
+            catch { $errorBody = "<body niet te lezen: $($_.Exception.Message)>" }
+        }
+
+        # Graph zet de machineleesbare reden in error.code; die is bruikbaarder
+        # dan de prozatekst als we straks moeten uitzoeken wat er precies afkeurt.
+        if ($errorBody) {
+            try {
+                $parsed = $errorBody | ConvertFrom-Json
+                $errorCode = Get-Prop (Get-Prop $parsed 'error') 'code'
+            }
+            catch { }
         }
 
         $result.steps.registrationError = [ordered]@{
-            statusCode = $status
-            message    = $graphError
+            statusCode   = $status
+            errorCode    = $errorCode
+            message      = $graphError
+            responseBody = $errorBody
+            exceptionType = $_.Exception.GetType().FullName
+        }
+
+        if ($errorBody) {
+            Write-Host ''
+            Write-Host 'Response body van Graph:' -ForegroundColor Yellow
+            Write-Host $errorBody
         }
 
         # De twee vragen uit elkaar trekken. Een 401/403 zegt iets over rechten,
@@ -396,7 +493,8 @@ Wissel met: Set-AzContext -SubscriptionId $SubscriptionId
                 Add-Note 'HTTP 400 : het verzoek kwam door de rechtencontrole heen maar het credential zelf werd geweigerd. Kijk in de foutmelding welk veld Entra afkeurt.'
             }
             default {
-                Add-Note "HTTP $status : niet eenduidig toe te wijzen aan rechten of formaat. Zie het resultaatbestand."
+                $shown = if ($null -ne $status) { "HTTP $status" } else { 'Geen HTTP-status uit de fout te halen' }
+                Add-Note "$shown : niet eenduidig toe te wijzen aan rechten of formaat. Beoordeel handmatig aan de hand van responseBody in het resultaatbestand."
             }
         }
 
