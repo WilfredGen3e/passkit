@@ -56,6 +56,12 @@
     Onze eigen app is bedoeld om dat te omzeilen: eenmalig geconsent in de
     partnertenant, en via GDAP de klanttenants in.
 
+.PARAMETER UseDeviceCode
+    Aanmelden met een device code in plaats van een browservenster. Nodig zodra
+    het script draait vanuit een sessie die geen venster naar de voorgrond kan
+    halen; het WAM-dialoog verdwijnt daar achter de terminal en breekt na twee
+    minuten af.
+
 .PARAMETER SkipRegistration
     Alles opbouwen en wegschrijven, maar niet daadwerkelijk POSTen. Handig om
     eerst te zien wat er verstuurd zou worden.
@@ -75,6 +81,7 @@ param(
     [Parameter(Mandatory)][string]$SubscriptionId,
 
     [string]$ClientId,
+    [switch]$UseDeviceCode,
     [string]$KeyName,
     [string]$DisplayName = 'Passkey Manager fase 0-test',
     [guid]$Aaguid = '00000000-0000-0000-0000-000000000000',
@@ -196,8 +203,6 @@ Wissel met: Set-AzContext -SubscriptionId $SubscriptionId
     Write-Host "   Az        : $($azContext.Account.Id)"
     Write-Host "   sub       : $activeSubName ($activeSubId)"
 
-    # Leesbaarheid van de vault nu vaststellen, niet straks. Faalt dit op
-    # rechten, dan ontbreekt Key Vault Crypto Officer.
     try {
         $vault = Get-AzKeyVault -VaultName $KeyVaultName -ErrorAction Stop
         if (-not $vault) { throw "Key Vault $KeyVaultName niet gevonden." }
@@ -205,6 +210,26 @@ Wissel met: Set-AzContext -SubscriptionId $SubscriptionId
     }
     catch {
         throw "Key Vault '$KeyVaultName' niet bereikbaar: $($_.Exception.Message)"
+    }
+
+    # Bovenstaande is een management-call en zegt niets over het recht dat we
+    # straks nodig hebben: sleutels aanmaken is een data plane-actie, en die
+    # rollen erven niet uit Owner of Contributor. Een vault in RBAC-modus laat
+    # een Owner dus wel de vault zien maar geen sleutel aanmaken. Zonder deze
+    # tweede controle slaagt de preflight en faalt de run pas nadat de challenge
+    # is opgehaald.
+    try {
+        Get-AzKeyVaultKey -VaultName $KeyVaultName -ErrorAction Stop | Out-Null
+        Write-Host '   data plane: lezen bevestigd'
+    }
+    catch {
+        $rbacHint = if ($vault.EnableRbacAuthorization) {
+            "De vault staat in RBAC-modus. Ken 'Key Vault Crypto Officer' toe op de vault zelf; Owner op de subscription volstaat niet voor data plane-acties."
+        }
+        else {
+            'De vault gebruikt access policies. Zorg voor Create- en Get-rechten op sleutels.'
+        }
+        throw "Geen data plane-toegang tot '$KeyVaultName': $($_.Exception.Message)`n$rbacHint"
     }
 
     $result.steps.preflight = [ordered]@{
@@ -248,6 +273,13 @@ Wissel met: Set-AzContext -SubscriptionId $SubscriptionId
         if ($ClientId) {
             $connectArgs.ClientId = $ClientId
             Write-Host "   app-registratie: $ClientId"
+        }
+        # Het interactieve aanmeldvenster van WAM opent achter de terminal en
+        # wordt dan na twee minuten afgebroken zonder dat iemand het gezien
+        # heeft. Device code heeft geen venster nodig en werkt dus ook vanuit
+        # een sessie zonder eigen desktop.
+        if ($UseDeviceCode) {
+            $connectArgs.UseDeviceAuthentication = $true
         }
         else {
             Add-Note 'Geen -ClientId opgegeven, dus Connect-MgGraph gebruikt de Microsoft Graph Command Line Tools-app. Die moet per klanttenant apart ingericht worden en een GDAP-account mag dat niet; verwacht hier een autorisatiefout die niets over passkeys zegt.'
