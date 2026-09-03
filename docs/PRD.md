@@ -1,9 +1,10 @@
 # PRD — Centraal passkey-beheer voor MSP-beheerde admin-accounts
 
-**Versie:** 1.0
-**Datum:** 19 augustus 2026
+**Versie:** 1.1
+**Datum:** 3 september 2026
 **Status:** Ter besluitvorming / gereed voor uitwerking
 **Vervangt:** alle eerdere concepten
+**Wijziging t.o.v. 1.0:** de Windows-provider-haalbaarheid is geen fase-6 "later" meer, maar een blokkerende validatie naast de Entra/GDAP-vraag (§11, §12, §14) — zonder werkende Windows-provider heeft dit ontwerp geen gebruiksmechanisme, en er is bewust geen browserextensie-alternatief.
 
 ---
 
@@ -173,27 +174,38 @@ Alerts op: gebruik van een noodtoegang-account, revoke, rolwijziging, registrati
 
 | Fase | Resultaat |
 |---|---|
-| **0** | Testtenant: bevestig dat Entra een software-gegenereerde credential accepteert via de provisioning-API, én dat dat lukt met alleen GDAP-rechten |
+| **0a** | Testtenant: bevestig dat Entra een software-gegenereerde credential accepteert via de provisioning-API, én dat dat lukt met alleen GDAP-rechten |
+| **0b** | Windows-provider-haalbaarheid: bevestig dat een eigen `IPluginAuthenticator` daadwerkelijk door Windows 11 wordt aangeroepen bij een passkey-aanmelding — minimale POC, geen productieflow (zie §12.1) |
 | **1** | Datamodel, klantfolders, Entra-login, PIM-koppeling, RBAC |
 | **2** | Registratieflow via Graph, één klant end-to-end |
 | **3** | Auditlog, alerts, driftdetectie |
 | **4** | Onboarding-API, bulkuitrol over de klantenbase |
 | **5** | Sign-endpoint gereed maken voor de provider |
-| **6** | Windows passkey provider (apart traject, zie §12) |
+| **6** | Windows passkey provider, productierijp op basis van 0b (zie §12.2) |
 
-Fase 0 is een middag werk en bepaalt of de rest zin heeft.
+**0a en 0b zijn beide blokkerend, en gelijkwaardig belangrijk.** Zonder 0a heeft het opslagmodel geen zin; zonder 0b heeft het hele project geen gebruiksmechanisme, want er is bewust geen browserextensie-alternatief. Dat de Windows-provider in een eerdere versie van dit document als "apart traject" bij fase 6 stond, was een verkeerde inschatting van het risico: het is geen uitbreiding die later kan volgen, het is de vraag die bepaalt of dit project een manier heeft om passkeys daadwerkelijk te gebruiken.
 
 ---
 
-## 12. Windows provider — apart traject
+## 12. Windows provider
 
-De clientcomponent die de passkeys bruikbaar maakt bij het inloggen. Windows 11 kent hiervoor een COM-interface `IPluginAuthenticator`: een vendor levert een verpakte app die een COM-object registreert, een AAGUID en naam meelevert, waarna het OS WebAuthn-ceremonies naar die app dispatcht. Registratie loopt via `WebAuthNPluginAddAuthenticator`, credential-metadata via `WebAuthNPluginAuthenticatorAddCredentials` en `RemoveCredentials`, user verification via `WebAuthNPluginPerformUserVerification` met Windows Hello.
+De clientcomponent die de passkeys bruikbaar maakt bij het inloggen. Dit is niet een detail dat later uitgewerkt kan worden: zonder een werkende Windows-provider heeft de rest van dit ontwerp geen manier om passkeys daadwerkelijk te gebruiken, en er is bewust geen browserextensie-alternatief. Vandaar fase 0b (§11): de haalbaarheid hiervan wordt naast de Entra/GDAP-vraag als eerste getoetst, vóór er in fase 1–5 geïnvesteerd wordt.
+
+### 12.1 Fase 0b — minimale haalbaarheids-POC
+
+Doel is uitsluitend aantonen **dát** Windows 11 een eigen `IPluginAuthenticator` daadwerkelijk aanroept bij een passkey-aanmelding — niet een werkende registratie- of tekenflow bouwen. Concreet: een geregistreerde plugin die bij aanroep een "rondje" maakt naar het bestaande `phase0`-PowerShell-script (dat al iets naar Key Vault wegschrijft), puur om te bewijzen dat de aanroep vanuit Windows daadwerkelijk bij onze eigen code aankomt. Geen productieflow, geen echte signing, geen credential-scoping — dat is §12.2 / fase 6.
+
+Slaagt dit niet — Windows roept de plugin niet aan, registratie lukt niet, of het OS behandelt third-party plugin-authenticators anders dan gedocumenteerd — dan is dat een showstopper voor het hele project, niet alleen voor fase 6.
+
+### 12.2 Productie-uitwerking (fase 6, na geslaagde 0b)
+
+Windows 11 kent hiervoor een COM-interface `IPluginAuthenticator`: een vendor levert een verpakte app die een COM-object registreert, een AAGUID en naam meelevert, waarna het OS WebAuthn-ceremonies naar die app dispatcht. Registratie loopt via `WebAuthNPluginAddAuthenticator`, credential-metadata via `WebAuthNPluginAuthenticatorAddCredentials` en `RemoveCredentials`, user verification via `WebAuthNPluginPerformUserVerification` met Windows Hello.
 
 Referentie: het Contoso Passkey Manager-sample in `microsoft/Windows-classic-samples`, headers in `microsoft/webauthn`.
 
 **Te ontwerpen: het credential-pickerprobleem.** Alle Entra-passkeys van alle klanten delen dezelfde RP ID. Publiceer je ze allemaal aan Windows, dan krijgt de engineer bij elke login honderden opties. Oplossing: de provider publiceert alleen de credentials van de klant die op dat moment actief is, vervallend na inactiviteit of bij lock. Levert meteen veiligheidswinst — nooit meer dan één klant tegelijk scherp.
 
-**Benodigde competenties:** C++/COM/WinUI 3, CBOR en COSE, ECDSA P-256 en WebAuthn op detailniveau, MSIX-packaging en signing. Inschatting 6–9 maanden. Als die kennis niet in huis is: inkopen, niet leren op een Tier-0-systeem.
+**Benodigde competenties:** C++/COM/WinUI 3, CBOR en COSE, ECDSA P-256 en WebAuthn op detailniveau, MSIX-packaging en signing. Inschatting 6–9 maanden voor de productierijpe versie. Als die kennis niet in huis is: inkopen, niet leren op een Tier-0-systeem.
 
 ---
 
@@ -216,13 +228,14 @@ Referentie: het Contoso Passkey Manager-sample in `microsoft/Windows-classic-sam
 
 ## 14. Openstaande punten
 
-1. **Fase 0-test** — twee vragen die los van elkaar staan en allebei beantwoord moeten worden:
+1. **Fase 0a-test (Entra/GDAP)** — twee vragen die los van elkaar staan en allebei beantwoord moeten worden:
    - accepteert Entra een volledig in software gegenereerde credential? Volgt logisch uit het ontbreken van attestation-handhaving, maar de hele bouw hangt eraan.
    - werkt de registratieflow met uitsluitend GDAP-rechten, dus namens de gebruiker in plaats van als de gebruiker? De provisioning-API is primair op self-service geënt; dit is het waarschijnlijkste faalpunt van de twee.
 
    Valt de tweede vraag negatief uit, dan is er nog een uitweg via een tijdelijke sessie als het GA-account zelf, maar dat verandert de registratieflow wezenlijk en hoort dan opnieuw ontworpen te worden.
-2. **Key Vault-tier** — Premium rekent per sleutel per maand, wat bij 2000 sleutels aantikt; Managed HSM heeft een vaste prijs die op dit volume gunstiger kan uitvallen. Ook throttling- en sleutelaantallimieten per vault checken, zo nodig sharden.
-3. **GDAP-rolkeuze** per klanttenant voor de registratieflow.
-4. **C++/COM-capaciteit** in huis of inkopen, voor fase 6.
-5. **Klantcommunicatie** — vastleggen in de dienstverleningsovereenkomst dat wij deze credentials houden.
-6. **Break-glass buiten dit systeem** — bevestigen dat de bestaande procedure per klanttenant dekkend blijft.
+2. **Fase 0b-test (Windows-provider)** — roept Windows 11 een eigen `IPluginAuthenticator` daadwerkelijk aan bij een passkey-aanmelding? Zie §12.1. Gelijkwaardig blokkerend aan 0a: zonder positief antwoord hier is er geen browserextensie-alternatief, en heeft de rest van het ontwerp geen gebruiksmechanisme.
+3. **Key Vault-tier** — Premium rekent per sleutel per maand, wat bij 2000 sleutels aantikt; Managed HSM heeft een vaste prijs die op dit volume gunstiger kan uitvallen. Ook throttling- en sleutelaantallimieten per vault checken, zo nodig sharden.
+4. **GDAP-rolkeuze** per klanttenant voor de registratieflow.
+5. **C++/COM-capaciteit** in huis of inkopen, voor fase 6.
+6. **Klantcommunicatie** — vastleggen in de dienstverleningsovereenkomst dat wij deze credentials houden.
+7. **Break-glass buiten dit systeem** — bevestigen dat de bestaande procedure per klanttenant dekkend blijft.

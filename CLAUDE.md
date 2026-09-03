@@ -19,7 +19,7 @@ Dit wijkt op een fundamenteel punt af van een eerder verkend model: **geen envel
 - **Registratie is volledig server-side via Graph** (`POST /users/{upn}/authentication/fido2Methods`), geen browserceremonie — dit is een bewust andere aanpak dan "klant-site + interactieve WebAuthn `create()`". Vereist GDAP naar de klanttenant + "Allow self-service setup" in hun FIDO2-beleid. Of dat werkt met alleen gedelegeerde (GDAP-)rechten is nog niet bewezen (zie Status).
 - **UV per handeling, niet per sessie.** De backend accepteert alleen een tekenverzoek met een verse Windows Hello-bevestiging — PIM is de poort, user verification is de check per handeling. Dit is de belangrijkste beveiligingsmaatregel in het ontwerp.
 - **Scope per aanvraag**, niet per sessie: elke tekenoperatie toetst engineer + klant + actieve klant-context + rol op precies die klant.
-- **Windows passkey provider is een apart traject** (fase 6), pas nadat de backend/registratieflow bewezen werkt. `IPluginAuthenticator`-COM-interface, alleen op eigen ~20–80 workstations, niet bij klanten. Ingeschat op 6–9 maanden, vereist C++/COM/WinUI 3/CBOR/COSE-kennis — inkopen als die er niet is.
+- **Windows passkey provider is géén "later" traject.** `IPluginAuthenticator`-COM-interface, alleen op eigen ~20–80 workstations, niet bij klanten. Er is bewust geen browserextensie-alternatief, dus de haalbaarheid hiervan is (sinds 3 september 2026) fase 0b — even blokkerend als de Entra/GDAP-vraag (0a), vóór er in fase 1+ geïnvesteerd wordt. Pas de productierijpe versie (fase 6, ná geslaagde 0b) is ingeschat op 6–9 maanden en vereist C++/COM/WinUI 3/CBOR/COSE-kennis.
 - **Rollen per klant:** Reader / Operator / Revoker / Tenant Admin.
 - **Onderscheid beheer- vs. noodtoegangsaccounts**: verschillend alert- en rapportagebeleid (zie PRD §4.4).
 
@@ -55,11 +55,14 @@ Datamodel: `Klant → Account (beheer|noodtoegang) → Credential (Key Vault key
 
 ## Status
 
-**Fase 0 loopt, nog niet afgerond.** De kernvraag — accepteert Entra een passkey die nooit in een authenticator heeft gezeten? — is nog onbeantwoord. Er is nog geen enkele registratie-POST gelukt; alle tijd tot nu toe ging op aan toegang tot de testtenant krijgen, niet aan het passkey-formaat zelf.
+**Fase 0 loopt, nog niet afgerond — en is sinds 3 september 2026 in twee gelijkwaardig blokkerende sporen gesplitst (PRD v1.1 §11):**
 
-Twee deelvragen, los van elkaar te beantwoorden (bepalend voor wat een 4xx straks betekent):
-1. **Formaat** — slikt Entra een `fmt: none`-attestation-object met een Key Vault-sleutel die nooit een authenticator is geweest?
-2. **Rechten** — kan dit via GDAP namens de gebruiker, of eist de provisioning-API dat de gebruiker het zelf doet?
+- **0a — Entra/GDAP.** De kernvraag — accepteert Entra een passkey die nooit in een authenticator heeft gezeten? — is nog onbeantwoord. Er is nog geen enkele registratie-POST gelukt; alle tijd tot nu toe ging op aan toegang tot de testtenant krijgen, niet aan het passkey-formaat zelf. Twee deelvragen, los van elkaar te beantwoorden (bepalend voor wat een 4xx straks betekent):
+  1. **Formaat** — slikt Entra een `fmt: none`-attestation-object met een Key Vault-sleutel die nooit een authenticator is geweest?
+  2. **Rechten** — kan dit via GDAP namens de gebruiker, of eist de provisioning-API dat de gebruiker het zelf doet?
+- **0b — Windows-provider-haalbaarheid (nieuw, PRD §12.1).** Roept Windows 11 een eigen `IPluginAuthenticator` daadwerkelijk aan bij een passkey-aanmelding? Nog niet getest. Eerste POC is bewust minimaal: geen echte registratie/signing, alleen een rondje naar het bestaande `phase0`-script om te bewijzen dat Windows de plugin aanroept. Er is bewust geen browserextensie-fallback — faalt dit, dan stopt het project.
+
+**Geplande volgorde:** Key Vault-schrijftest in de testtenant, direct gevolgd door de 0b-POC — vóór verder gewerkt wordt aan de 0a-inrichtingsstappen hieronder.
 
 Belangrijkste tussentijdse bevinding (raakt het ontwerp): **multi-tenant + GDAP neemt de per-tenant inrichting niet weg.** Elke klanttenant heeft een eenmalige onboarding nodig (consent + service principal) voordat er iets kan via Graph — dat moet bij schaal (~300 klanten) een geautomatiseerde flow worden, geen handwerk. Zie `docs/VOORTGANG.md` §"Open vragen" punt 2 voor het beoogde onboarding-vs-steady-state-model.
 

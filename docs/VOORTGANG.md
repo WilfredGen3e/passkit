@@ -18,7 +18,12 @@ Hoever we kwamen: preflight geslaagd, Graph-login geslaagd met een eigen app-reg
 
 ## De volgende stap
 
-Drie inrichtingsstappen, dan pas de test. Geen daarvan meet iets over passkeys.
+**Herprioritering (3 september 2026): twee losse toetsen, beide blokkerend, in deze volgorde.** Zie PRD v1.1 §11/§12/§14 voor de onderbouwing.
+
+1. **Morgen: Key Vault-schrijftest** in de testtenant — kunnen we er een sleutel naartoe schrijven? Dit is de eenvoudigste van de twee: het opslagmodel zelf wordt niet gewantrouwd ("dat beunen we wel in elkaar"), dit ruimt vooral de bekende blokkade op (Key Vault Crypto Officer-rol ontbreekt nog, zie stap 2 hieronder).
+2. **Direct daarna: minimale POC van de Windows-provider (fase 0b, PRD §12.1).** Dit was tot nu toe geformuleerd als fase 6 — een "later" traject — en dat was een verkeerde risico-inschatting. Zonder werkende `IPluginAuthenticator` heeft de rest van dit ontwerp geen gebruiksmechanisme, en er is bewust **geen browserextensie-alternatief**. De eerste versie hoeft niets van de echte flow te doen: puur bewijzen dat Windows de plugin daadwerkelijk aanroept bij een passkey-aanmelding, door een rondje te maken naar het bestaande `phase0`-PowerShell-script dat al iets naar Key Vault wegschrijft. Geen echte signing, geen credential-scoping, geen productieflow. Slaagt dit niet, dan stopt het project hier — dat weegt zwaarder dan doorwerken aan de Entra/GDAP-registratieflow (0a).
+
+De uitgewerkte inrichtingsstappen hieronder zijn voor de volledige Entra/GDAP-registratietest (0a) en blijven nodig, maar zijn dus niet meer per se de eerstvolgende actie. Drie inrichtingsstappen, dan pas die test. Geen daarvan meet iets over passkeys.
 
 **1. Consent voor onze eigen app in de testtenant.** Vereist Global Admin daar; via het access package is dat tijdelijk te krijgen. Een GDAP-account alleen kan het niet — dat is geprobeerd en het gaf 403.
 
@@ -131,6 +136,7 @@ Dingen die geld of tijd kosten als iemand ze opnieuw moet ontdekken.
 
 ## Afspraken over dit project
 
+- **Windows-provider-haalbaarheid (0b) is een gate, geen fase-6 nice-to-have.** Er is bewust geen browserextensie-fallback: als die route niet werkt, heeft doorbouwen weinig zin. Zie PRD v1.1 §11/§12.
 - **Nooit vooruitbouwen op een onbeantwoorde fase.** De fasering in PRD §11 is bewust zo gesneden dat elke fase de volgende rechtvaardigt.
 - **Testtenant, niet klanttenant**, tot fase 0 rond is. En: tenant en subscription staan expliciet vast voordat er iets uitgevoerd wordt, ook bij read-only verkenning.
 - **Aannames markeren in plaats van hardcoderen.** RP ID, API-versie en body-vorm staan nu als expliciet openstaand in de code en de leesmij; dat zo houden tot ze bewezen zijn.
@@ -139,6 +145,11 @@ Dingen die geld of tijd kosten als iemand ze opnieuw moet ontdekken.
 ---
 
 ## Log
+
+### 3 september 2026 — herprioritering
+- Besloten: Windows-provider-haalbaarheid is geen fase 6 meer maar fase 0b, gelijkwaardig blokkerend aan de Entra/GDAP-vraag (0a). Reden: er is bewust geen browserextensie-alternatief, dus zonder werkende Windows-provider heeft het project geen manier om passkeys daadwerkelijk te gebruiken.
+- Geplande volgorde: Key Vault-schrijftest in de testtenant, direct gevolgd door een minimale POC van de Windows-provider die alleen aantoont dat Windows de plugin aanroept (rondje naar het bestaande `phase0`-script), nog geen productieflow.
+- PRD bijgewerkt naar v1.1 (§11, §12, §14) om dit te reflecteren.
 
 ### 19 augustus 2026
 - Repo `WilfredGen3e/passkeymanager` was leeg; ingericht met PRD als eerste commit.
