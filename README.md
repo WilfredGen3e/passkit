@@ -1,4 +1,4 @@
-# Passkey Manager
+# PassKit
 
 Centraal beheer van passkeys voor MSP-beheerde admin-accounts in klanttenants.
 

@@ -83,7 +83,7 @@ param(
     [string]$ClientId,
     [switch]$UseDeviceCode,
     [string]$KeyName,
-    [string]$DisplayName = 'Passkey Manager fase 0-test',
+    [string]$DisplayName = 'PassKit fase 0-test',
     [guid]$Aaguid = '00000000-0000-0000-0000-000000000000',
     [string]$Origin,
     [ValidateSet('beta', 'v1.0')][string]$GraphApiVersion = 'beta',
