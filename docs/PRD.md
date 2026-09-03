@@ -193,7 +193,9 @@ De clientcomponent die de passkeys bruikbaar maakt bij het inloggen. Dit is niet
 
 ### 12.1 Fase 0b — minimale haalbaarheids-POC
 
-Doel is uitsluitend aantonen **dát** Windows 11 een eigen `IPluginAuthenticator` daadwerkelijk aanroept bij een passkey-aanmelding — niet een werkende registratie- of tekenflow bouwen. Concreet: een geregistreerde plugin die bij aanroep een "rondje" maakt naar het bestaande `phase0`-PowerShell-script (dat al iets naar Key Vault wegschrijft), puur om te bewijzen dat de aanroep vanuit Windows daadwerkelijk bij onze eigen code aankomt. Geen productieflow, geen echte signing, geen credential-scoping — dat is §12.2 / fase 6.
+Doel is uitsluitend aantonen **dát** Windows 11 een eigen `IPluginAuthenticator` daadwerkelijk aanroept bij een passkey-aanmelding — niet een werkende registratie- of tekenflow bouwen, en nadrukkelijk ook niet Key Vault erbij betrekken. Dit is een Windows/COM-vraag, geen Azure-vraag; die twee bewust gescheiden houden voorkomt het patroon dat bij 0a al pijnlijk bleek (twee onafhankelijke faalpunten door elkaar, waardoor een fout niet te duiden is).
+
+Concreet: een geregistreerde plugin die bij aanroep een "rondje" maakt en de aanroep **naar een tekstbestand of logregel wegschrijft** — geen Key Vault-call, puur om te bewijzen dat de aanroep vanuit Windows daadwerkelijk bij onze eigen code aankomt. Geen productieflow, geen echte signing, geen credential-scoping — dat is §12.2 / fase 6, waarin de stand-in vervangen wordt door de echte Key Vault-aanroep (een geïsoleerde, laag-risico vervolgstap zodra 0b geslaagd is).
 
 Slaagt dit niet — Windows roept de plugin niet aan, registratie lukt niet, of het OS behandelt third-party plugin-authenticators anders dan gedocumenteerd — dan is dat een showstopper voor het hele project, niet alleen voor fase 6.
 
