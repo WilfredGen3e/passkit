@@ -50,6 +50,11 @@ Datamodel: `Klant → Account (beheer|noodtoegang) → Credential (Key Vault key
   PasskeyManager.Phase0.psm1 — handgeschreven CBOR/COSE-encoder + WebAuthn-structuren, geen dependencies
   Test-Encoding.ps1  — offline encodertest (30 controles), geen Azure nodig
   Invoke-Phase0Test.ps1 — echte test tegen Key Vault + Graph in een testtenant
+/phase0b/            — fase 0b: is het credential bruikbaar, en kan Windows onze provider aanroepen?
+  Invoke-PasskeySignIn.ps1 — meldt aan bij Entra met de sleutel uit een 0a-artefact
+  Invoke-ColdSignIn.ps1    — zet Chrome's Windows-SSO tijdelijk uit en draait de aanmeldtest
+  Reset-Passkeys.ps1       — verwijdert alle FIDO2-methoden van een testaccount
+  Test-PluginRegistration.ps1 — meet of Windows MSIX-identity eist voor een plugin-authenticator
 /CLAUDE.md           — dit bestand
 ```
 
@@ -57,12 +62,14 @@ Datamodel: `Klant → Account (beheer|noodtoegang) → Credential (Key Vault key
 
 **Fase 0 loopt, nog niet afgerond — en is sinds 3 september 2026 in twee gelijkwaardig blokkerende sporen gesplitst (PRD v1.1 §11):**
 
-- **0a — Entra/GDAP.** De kernvraag — accepteert Entra een passkey die nooit in een authenticator heeft gezeten? — is nog onbeantwoord. Er is nog geen enkele registratie-POST gelukt; alle tijd tot nu toe ging op aan toegang tot de testtenant krijgen, niet aan het passkey-formaat zelf. Twee deelvragen, los van elkaar te beantwoorden (bepalend voor wat een 4xx straks betekent):
-  1. **Formaat** — slikt Entra een `fmt: none`-attestation-object met een Key Vault-sleutel die nooit een authenticator is geweest?
-  2. **Rechten** — kan dit via GDAP namens de gebruiker, of eist de provisioning-API dat de gebruiker het zelf doet?
-- **0b — Windows-provider-haalbaarheid (nieuw, PRD §12.1).** Roept Windows 11 een eigen `IPluginAuthenticator` daadwerkelijk aan bij een passkey-aanmelding? Nog niet getest. Eerste POC is bewust minimaal: geen echte registratie/signing, alleen een rondje naar het bestaande `phase0`-script om te bewijzen dat Windows de plugin aanroept. Er is bewust geen browserextensie-fallback — faalt dit, dan stopt het project.
+- **0a — Entra/GDAP.** Twee deelvragen, los van elkaar te beantwoorden:
+  1. **Formaat** — slikt Entra een `fmt: none`-attestation-object met een sleutel die nooit een authenticator is geweest? **Ja, bewezen op 4 september 2026.** Geregistreerd als `notAttested` / `synced`, en op dezelfde dag is er ook daadwerkelijk mee aangemeld (authorization code van Entra). Het credential deugt dus, en is bruikbaar.
+  2. **Rechten** — kan dit via GDAP namens de gebruiker, of eist de provisioning-API dat de gebruiker het zelf doet? **Nog onbeantwoord**: de geslaagde runs gebruikten een account uit de klanttenant zelf, dus er was geen delegatie in het spel. Ook nog niet getest tegen een Global Admin, en niet met de sleutel in Key Vault.
+- **0b — Windows-provider-haalbaarheid (PRD §12.1).** Roept Windows 11 een eigen `IPluginAuthenticator` daadwerkelijk aan bij een passkey-aanmelding? **Nog niet getest, maar de onbekenden zijn weg**: de interface is vier methoden met CTAP2-CBOR als wire-formaat, .NET volstaat (geen C++ nodig), en MSIX-package-identity is verplicht — dat laatste is gemeten (`APPMODEL_ERROR_NO_PACKAGE`), niet aangenomen. Wat nog gebouwd moet worden is de COM-server plus een CTAP2-CBOR-**decoder**, die er nog niet is. Er is bewust geen browserextensie-fallback — faalt dit, dan stopt het project.
 
-**Geplande volgorde:** Key Vault-schrijftest in de testtenant, direct gevolgd door de 0b-POC — vóór verder gewerkt wordt aan de 0a-inrichtingsstappen hieronder.
+**Vaste ontwerpregel, gevonden op 4 september:** de signature counter is **altijd 0**. Entra registreert deze credentials als `synced` en weigert elke andere waarde met `AADSTS135017`. Geldt ook voor de Windows-provider straks. Test daarom nooit met Chrome's virtuele authenticator — die hoogt de counter op en maakt een credential onbruikbaar.
+
+**Geplande volgorde:** de 0b-POC (COM-server die in de Windows-providerkiezer verschijnt), daarna de resterende 0a-vragen: GDAP, Global Admin, en de Key Vault-schrijftest.
 
 Belangrijkste tussentijdse bevinding (raakt het ontwerp): **multi-tenant + GDAP neemt de per-tenant inrichting niet weg.** Elke klanttenant heeft een eenmalige onboarding nodig (consent + service principal) voordat er iets kan via Graph — dat moet bij schaal (~300 klanten) een geautomatiseerde flow worden, geen handwerk. Zie `docs/VOORTGANG.md` §"Open vragen" punt 2 voor het beoogde onboarding-vs-steady-state-model.
 
